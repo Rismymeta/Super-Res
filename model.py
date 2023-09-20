@@ -12,97 +12,84 @@ from keras.layers import Conv2D, PReLU, BatchNormalization, Flatten
 from keras.layers import UpSampling2D, LeakyReLU, Dense, Input, add
 from tqdm import tqdm
 
-# Function to preprocess HR and LR images into 16 blocks of 32x32 with padding
-def preprocess_image(image):
-    block_size = 32
-    padding = 1
 
-    # Get the dimensions of the input image
-    image_height, image_width, _ = image.shape
+# Modify image preprocessing to divide HR and LR images into blocks
+def preprocess_images(hr_img, lr_img, hr_block_size=(128, 128), lr_block_size=(32, 32)):
+    hr_blocks = []
+    lr_blocks = []
+    
+    hr_height, hr_width, _ = hr_img.shape
+    lr_height, lr_width, _ = lr_img.shape
+    
+    for i in range(0, hr_height, hr_block_size[0]):
+        for j in range(0, hr_width, hr_block_size[1]):
+            hr_block = hr_img[i:i+hr_block_size[0], j:j+hr_block_size[1]]
+            lr_block = lr_img[i//4:(i+hr_block_size[0])//4, j//4:(j+hr_block_size[1])//4]
+            
+            # Add padding layer
+            hr_padding = np.zeros_like(hr_block)
+            lr_padding = np.zeros_like(lr_block)
+            
+            hr_padding[:hr_block_size[0], :hr_block_size[1], 0] = i
+            hr_padding[:hr_block_size[0], :hr_block_size[1], 1] = j
+            lr_padding[:lr_block_size[0], :lr_block_size[1], 0] = i // 4
+            lr_padding[:lr_block_size[0], :lr_block_size[1], 1] = j // 4
+            
+            hr_blocks.append(np.concatenate((hr_block, hr_padding), axis=-1))
+            lr_blocks.append(np.concatenate((lr_block, lr_padding), axis=-1))
+    # Convert Python integers to uint8 explicitly to avoid warnings
+    hr_padding[:hr_block_size[0], :hr_block_size[1], 0] = np.array(i).astype(np.uint8)
+    hr_padding[:hr_block_size[0], :hr_block_size[1], 1] = np.array(j).astype(np.uint8)
+    return hr_blocks, lr_blocks
 
-    # Calculate the number of blocks in each dimension
-    num_blocks_x = image_width // block_size
-    num_blocks_y = image_height // block_size
 
-    # Initialize empty lists to store preprocessed blocks and padding values
-    preprocessed_blocks = []
-    padding_values = []
-
-    # Iterate over rows of blocks
-    for y_block in range(num_blocks_y):
-        for x_block in range(num_blocks_x):
-            # Calculate block coordinates
-            y_start = y_block * block_size
-            y_end = (y_block + 1) * block_size
-            x_start = x_block * block_size
-            x_end = (x_block + 1) * block_size
-
-            # Extract a 32x32 block from the image
-            block = image[y_start:y_end, x_start:x_end]
-
-            # Add 1-pixel padding with values corresponding to the coordinates
-            x_padding = x_block * block_size
-            y_padding = y_block * block_size
-            padded_block = np.pad(block, ((padding, padding), (padding, padding), (0, 0)),
-                                   mode='constant', constant_values=(x_padding, y_padding))
-
-            # Append the preprocessed block and padding values to the lists
-            preprocessed_blocks.append(padded_block)
-            padding_values.append((x_padding, y_padding))
-
-    return preprocessed_blocks, padding_values
 
 #Define blocks to build the generator
 def res_block(ip):
-    
-    res_model = Conv2D(64, (3,3), padding = "same")(ip)
-    res_model = BatchNormalization(momentum = 0.5)(res_model)
-    res_model = PReLU(shared_axes = [1,2])(res_model)
-    
-    res_model = Conv2D(64, (3,3), padding = "same")(res_model)
-    res_model = BatchNormalization(momentum = 0.5)(res_model)
-    
-    return add([ip,res_model])
+    res_model = Conv2D(64, (3, 3), padding="same")(ip)
+    res_model = BatchNormalization(momentum=0.5)(res_model)
+    res_model = PReLU(shared_axes=[1, 2])(res_model)
 
+    res_model = Conv2D(64, (3, 3), padding="same")(res_model)
+    res_model = BatchNormalization(momentum=0.5)(res_model)
+
+    return add([ip, res_model])
+
+# Upscale Block
 def upscale_block(ip):
-    
-    up_model = Conv2D(256, (3,3), padding="same")(ip)
-    up_model = UpSampling2D( size = 2 )(up_model)
-    up_model = PReLU(shared_axes=[1,2])(up_model)
-    
+    up_model = Conv2D(256, (3, 3), padding="same")(ip)
+    up_model = UpSampling2D(size=2)(up_model)
+    up_model = PReLU(shared_axes=[1, 2])(up_model)
+
     return up_model
+
 
 #Generator model
 def create_gen(gen_ip, num_res_block):
-    layers = Conv2D(64, (9,9), padding="same")(gen_ip)
-    layers = PReLU(shared_axes=[1,2])(layers)
+    layers = Conv2D(64, (9, 9), padding="same")(gen_ip)
+    layers = PReLU(shared_axes=[1, 2])(layers)
 
     temp = layers
 
     for i in range(num_res_block):
         layers = res_block(layers)
 
-    layers = Conv2D(64, (3,3), padding="same")(layers)
+    layers = Conv2D(64, (3, 3), padding="same")(layers)
     layers = BatchNormalization(momentum=0.5)(layers)
-    layers = add([layers,temp])
+    layers = add([layers, temp])
 
     layers = upscale_block(layers)
     layers = upscale_block(layers)
 
-    op = Conv2D(3, (9,9), padding="same")(layers)
+    op = Conv2D(3, (9, 9), padding="same")(layers)
 
     return Model(inputs=gen_ip, outputs=op)
 
-#Descriminator block that will be used to construct the discriminator
-def discriminator_block(ip, filters, strides=1, bn=True):
-    
-    disc_model = Conv2D(filters, (3,3), strides = strides, padding="same")(ip)
-    
-    if bn:
-        disc_model = BatchNormalization( momentum=0.8 )(disc_model)
-    
-    disc_model = LeakyReLU( alpha=0.2 )(disc_model)
-    
+# Discriminator block that will be used to construct the discriminator
+def discriminator_block(ip):
+    disc_model = Conv2D(64, (3, 3), padding="same")(ip)
+    disc_model = LeakyReLU(alpha=0.2)(disc_model)
+
     return disc_model
 
 
@@ -130,24 +117,22 @@ def create_disc(disc_ip):
 
 
 #Build a pre-trained VGG19 model that outputs image features extracted at the third block of the model
-
-from keras.applications import VGG19
+from keras.applications.vgg19 import VGG19
 
 def build_vgg(hr_shape):
-    
-    vgg = VGG19(weights="imagenet",include_top=False, input_shape=hr_shape)
-    
+    vgg = VGG19(weights="imagenet", include_top=False, input_shape=hr_shape)
     return Model(inputs=vgg.inputs, outputs=vgg.layers[10].output)
+    
 
 #Combined model
 def create_comb(gen_model, disc_model, vgg, lr_ip, hr_ip):
     gen_img = gen_model(lr_ip)
-    
+
     gen_features = vgg(gen_img)
-    
+
     disc_model.trainable = False
     validity = disc_model(gen_img)
-    
+
     return Model(inputs=[lr_ip, hr_ip], outputs=[validity, gen_features])
 
 # 2 losses... adversarial loss and content (VGG) loss
@@ -161,80 +146,65 @@ def create_comb(gen_model, disc_model, vgg, lr_ip, hr_ip):
 
 
 #Load first n number of images (to train on a subset of all images)
-n = 5000
+# Load first n number of images (to train on a subset of all images)
+# Load images and preprocess them into blocks
+n = 50
 lr_list = os.listdir("data/lr_images")[:n]
 lr_images = []
-lr_padding_values = []  # To store padding values
+hr_images = []
 
 for img in lr_list:
     img_lr = cv2.imread("data/lr_images/" + img)
     img_lr = cv2.cvtColor(img_lr, cv2.COLOR_BGR2RGB)
-
-    # Resize LR image to 128x128
     img_lr = cv2.resize(img_lr, (128, 128))
 
-    # Preprocess LR image into 16 blocks of 32x32 pixels with padding and get padding values
-    preprocessed_lr_blocks, padding_values = preprocess_image(img_lr)
-    
-    lr_images.extend(preprocessed_lr_blocks)
-    lr_padding_values.extend(padding_values)
+    hr_list = os.listdir("data/hr_images")[:n]
+    for img in hr_list:
+        img_hr = cv2.imread("data/hr_images/" + img)
+        img_hr = cv2.cvtColor(img_hr, cv2.COLOR_BGR2RGB)
+        img_hr = cv2.resize(img_hr, (512, 512))
 
-hr_list = os.listdir("data/hr_images")[:n]
-hr_images = []
-hr_padding_values = []  # To store padding values
+        hr_blocks, lr_blocks = preprocess_images(img_hr, img_lr)
 
-for img in hr_list:
-    img_hr = cv2.imread("data/hr_images/" + img)
-    img_hr = cv2.cvtColor(img_hr, cv2.COLOR_BGR2RGB)
-
-    # Resize HR image to 512x512 (or the desired HR size)
-    img_hr = cv2.resize(img_hr, (512, 512))
-
-    # Preprocess HR image into 16 blocks of 32x32 pixels with padding and get padding values
-    preprocessed_hr_blocks, padding_values = preprocess_image(img_hr)
-    
-    hr_images.extend(preprocessed_hr_blocks)
-    hr_padding_values.extend(padding_values)
+        hr_images.extend(hr_blocks)
+        lr_images.extend(lr_blocks)
 
 lr_images = np.array(lr_images)
 hr_images = np.array(hr_images)
 
-
 #Sanity check, view few images
 import random
 import numpy as np
-image_number = random.randint(0, len(lr_images)-1)
+image_number = random.randint(0, len(lr_images) - 1)
 plt.figure(figsize=(12, 6))
 plt.subplot(121)
-plt.imshow(np.reshape(lr_images[image_number], (32, 32, 3)))
+plt.imshow(np.reshape(lr_images[image_number][:, :, :3], (32, 32, 3)))
 plt.subplot(122)
-plt.imshow(np.reshape(hr_images[image_number], (128, 128, 3)))
+plt.imshow(np.reshape(hr_images[image_number][:, :, :3], (128, 128, 3)))
 plt.show()
 
-#Scale values
+# Scale values
 lr_images = lr_images / 255.
 hr_images = hr_images / 255.
 
-#Split to train and test
-lr_train, lr_test, hr_train, hr_test = train_test_split(lr_images, hr_images, 
+lr_train, lr_test, hr_train, hr_test = train_test_split(lr_images, hr_images,
                                                       test_size=0.33, random_state=42)
 
-
-
-hr_shape = (hr_train.shape[1], hr_train.shape[2], hr_train.shape[3])
-lr_shape = (lr_train.shape[1], lr_train.shape[2], lr_train.shape[3])
+# Define input shapes
+hr_shape = (128, 128, 6)  # Including padding layer
+lr_shape = (32, 32, 6)    # Including padding layer
 
 lr_ip = Input(shape=lr_shape)
 hr_ip = Input(shape=hr_shape)
 
-generator = create_gen(lr_ip, num_res_block = 16)
+generator = create_gen(lr_ip, num_res_block=16)
 generator.summary()
 
 discriminator = create_disc(hr_ip)
 discriminator.compile(loss="binary_crossentropy", optimizer="adam", metrics=['accuracy'])
 discriminator.summary()
 
-vgg = build_vgg((128,128,3))
+vgg = build_vgg((128, 128, 3))
 print(vgg.summary())
 vgg.trainable = False
 
@@ -263,7 +233,7 @@ for it in range(int(hr_train.shape[0] / batch_size)):
     train_lr_batches.append(lr_train[start_idx:end_idx])
     
     
-epochs = 15
+epochs = 1
 #Enumerate training over epochs
 for e in range(epochs):
     
@@ -314,7 +284,7 @@ for e in range(epochs):
     #Report the progress during training. 
     print("epoch:", e+1 ,"g_loss:", g_loss, "d_loss:", d_loss)
 
-    if (e) % 5 == 0: #Change the frequency for model saving, if needed
+    if (e) % e == 0: #Change the frequency for model saving, if needed
         #Save the generator after every n epochs (Usually 10 epochs)
         generator.save("gen_new_"+ str(e) +".h5")
 

@@ -37,8 +37,11 @@ def preprocess_images(hr_img, lr_img, hr_block_size=(128, 128), lr_block_size=(3
             
             hr_blocks.append(np.concatenate((hr_block, hr_padding), axis=-1))
             lr_blocks.append(np.concatenate((lr_block, lr_padding), axis=-1))
-    
+    # Convert Python integers to uint8 explicitly to avoid warnings
+    hr_padding[:hr_block_size[0], :hr_block_size[1], 0] = np.array(i).astype(np.uint8)
+    hr_padding[:hr_block_size[0], :hr_block_size[1], 1] = np.array(j).astype(np.uint8)
     return hr_blocks, lr_blocks
+
 
 
 #Define blocks to build the generator
@@ -114,7 +117,7 @@ def create_disc(disc_ip):
 
 
 #Build a pre-trained VGG19 model that outputs image features extracted at the third block of the model
-from keras.applications import VGG19
+from keras.applications.vgg19 import VGG19
 
 def build_vgg(hr_shape):
     vgg = VGG19(weights="imagenet", include_top=False, input_shape=hr_shape)
@@ -146,18 +149,18 @@ def create_comb(gen_model, disc_model, vgg, lr_ip, hr_ip):
 # Load first n number of images (to train on a subset of all images)
 # Load images and preprocess them into blocks
 n = 50
-lr_list = os.listdir("D:\Work\MY3dMeta\Increasing_Res\SRGAN\data\lr_images")[:n]
+lr_list = os.listdir("data/lr_images")[:n]
 lr_images = []
 hr_images = []
 
 for img in lr_list:
-    img_lr = cv2.imread("D:\Work\MY3dMeta\Increasing_Res\SRGAN\data\lr_images" + img)
+    img_lr = cv2.imread("data/lr_images/" + img)
     img_lr = cv2.cvtColor(img_lr, cv2.COLOR_BGR2RGB)
     img_lr = cv2.resize(img_lr, (128, 128))
 
-    hr_list = os.listdir("D:\Work\MY3dMeta\Increasing_Res\SRGAN\data\hr_images")[:n]
+    hr_list = os.listdir("data/hr_images")[:n]
     for img in hr_list:
-        img_hr = cv2.imread("D:\Work\MY3dMeta\Increasing_Res\SRGAN\data\hr_images" + img)
+        img_hr = cv2.imread("data/hr_images/" + img)
         img_hr = cv2.cvtColor(img_hr, cv2.COLOR_BGR2RGB)
         img_hr = cv2.resize(img_hr, (512, 512))
 

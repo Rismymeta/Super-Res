@@ -243,6 +243,8 @@ for e in range(epochs):
     #Create empty lists to populate gen and disc losses. 
     g_losses = []
     d_losses = []
+    # Initialize an empty list to store enhanced blocks
+    enhanced_blocks = []
     
     #Enumerate training over batches. 
     for b in tqdm(range(len(train_hr_batches))):
@@ -251,6 +253,8 @@ for e in range(epochs):
         
         fake_imgs = generator.predict_on_batch(lr_imgs) #Fake images
         
+        # Append the generated fake images (blocks) to the list
+        enhanced_blocks.extend(fake_imgs)
         #First, train the discriminator on fake and real HR images. 
         discriminator.trainable = True
         d_loss_gen = discriminator.train_on_batch(fake_imgs, fake_label)
@@ -287,4 +291,37 @@ for e in range(epochs):
     if (e) % e == 0: #Change the frequency for model saving, if needed
         #Save the generator after every n epochs (Usually 10 epochs)
         generator.save("gen_new_"+ str(e) +".h5")
+def stitch_blocks(enhanced_blocks, original_shape, hr_block_size, lr_block_size):
+    hr_height, hr_width, _ = original_shape
+    num_blocks_height = hr_height // hr_block_size[0]
+    num_blocks_width = hr_width // hr_block_size[1]
+
+    stitched_image = np.zeros(original_shape, dtype=np.uint8)
+    block_index = 0
+
+    for i in range(num_blocks_height):
+        for j in range(num_blocks_width):
+            hr_block = enhanced_blocks[block_index]
+            block_index += 1
+
+            # Calculate the position to paste the block
+            y_start = i * hr_block_size[0]
+            y_end = y_start + hr_block_size[0]
+            x_start = j * hr_block_size[1]
+            x_end = x_start + hr_block_size[1]
+
+            # Paste the HR block onto the stitched image
+            stitched_image[y_start:y_end, x_start:x_end, :] = hr_block[:, :, :3]  # Exclude padding
+
+    return stitched_image
+
+# Example usage:
+stitched_image = stitch_blocks(enhanced_blocks, (512, 512, 3), hr_block_size=(128, 128), lr_block_size=(32, 32))
+
+# Display the stitched image
+import matplotlib.pyplot as plt
+plt.imshow(stitched_image)
+plt.axis('off')
+plt.title('Stitched Enhanced Image')
+plt.show()
 
